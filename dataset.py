@@ -489,7 +489,9 @@ if __name__ == "__main__":
     weak_teacher = models[3]
     strong_student = models[0]
 
-    math_task = MATH(limit=100, num_few_shot=5)
-    performance_gap_recovered = math_task.run(weak_teacher, strong_student)
+    math_task = MATH(limit=5, num_few_shot=5)
+    performance_gap_recovered, weak_floor, strong_ceiling, w2s_level = math_task.run(
+        weak_teacher, strong_student
+    )
 
     print("Performance gap recovered:", performance_gap_recovered)
