@@ -43,8 +43,6 @@ from typing import Any, Union, Literal
 from inspect_ai._eval.eval import eval
 from inspect_ai.solver import solver, Solver
 
-
-from metrics import ci_lower, ci_upper, median
 from inspect_ai.scorer import scorer, Score, accuracy
 import re
 
@@ -112,38 +110,26 @@ class MATH:
 
         self.ld = {"model": {"dataset_name": []}}
 
-    def step_1_eval_weak_teacher(self):
+    def run(self, weak_teacher, strong_student):
 
-        models = [
-            "claude-3-5-sonnet-20240620",
-            "claude-3-opus-20240229",
-            "claude-3-sonnet-20240229",
-            "claude-3-haiku-20240307",
-        ]
-        models = [f"anthropic/{model}" for model in models]
-
-        self.weak_teacher = models[3]
-        self.strong_student = models[0]
+        self.weak_teacher = weak_teacher
+        self.strong_student = strong_student
 
         tasks = [
             Task(
                 time_limit=self.task_timeout,
                 name=self.__class__.__name__,
                 dataset=self.train_half_1_dataset,
-                solver=self.few_shot_gold_solver(
-                    self.weak_teacher, "train_half_1"
-                ),  # from the parent class
-                scorer=self.grader_scorer(),  # implement a MATH-specific scorer
+                solver=self.few_shot_gold_solver(self.weak_teacher, "train_half_1"),
+                scorer=self.grader_scorer(),
                 config=GenerateConfig(temperature=0.5),
             ),
             Task(
                 time_limit=self.task_timeout,
                 name=self.__class__.__name__,
                 dataset=self.train_half_2_dataset,
-                solver=self.few_shot_gold_solver(
-                    self.weak_teacher, "train_half_2"
-                ),  # from the parent class
-                scorer=self.grader_scorer(),  # implement a MATH-specific scorer
+                solver=self.few_shot_gold_solver(self.weak_teacher, "train_half_2"),
+                scorer=self.grader_scorer(),
                 config=GenerateConfig(temperature=0.5),
             ),
         ]
@@ -160,53 +146,10 @@ class MATH:
 
         # 'results' is a list of EvalLog objects (usually one per task)
         # Each EvalLog contains metrics for the entire task/dataset.
-        model_metrics = {}  # dictionary to hold info for each model
-
-        for res in results:
-            # print(res)
-
-            # 1) Get the model name and task name
-            model_name = str(getattr(res.eval, "model", ""))
-            dataset_name = res.eval.task
-            dataset_name = str(getattr(res.eval.dataset, "name", ""))
-
-            # 2) Initialize defaults (or None) for each metric
-            accuracy = None
-            ci_lower = None
-            ci_upper = None
-            median = None
-
-            # 3) Check if results and scores exist
-            if res.results and res.results.scores:
-                for score in res.results.scores:
-                    if score.metrics:
-                        # 4) For each metric, check if it exists and store its value
-                        if "accuracy" in score.metrics:
-                            accuracy = score.metrics["accuracy"].value
-                        if "ci_lower" in score.metrics:
-                            ci_lower = score.metrics["ci_lower"].value
-                        if "ci_upper" in score.metrics:
-                            ci_upper = score.metrics["ci_upper"].value
-                        if "median" in score.metrics:
-                            median = score.metrics["median"].value
-
-            # 5) Save the metrics in a dictionary, keyed by the model name
-            if not model_metrics.get(model_name):
-                model_metrics[model_name] = {dataset_name: {}}
-
-            if not model_metrics[model_name].get(dataset_name):
-                model_metrics[model_name][dataset_name] = {}
-
-            model_metrics[model_name][dataset_name] = {
-                "accuracy": accuracy,
-                "ci_lower": ci_lower,
-                "ci_upper": ci_upper,
-                "median": median,
-            }
+        gold_model_metrics = self._get_accuracy_from_results(results)
 
         # print(self.ld)
 
-        print(model_metrics)
         tasks = [
             Task(
                 time_limit=self.task_timeout,
@@ -230,6 +173,60 @@ class MATH:
             max_tasks=500,
         )
 
+        w2s_model_metrics = self._get_accuracy_from_results(results)
+
+        print("gold", gold_model_metrics)
+
+        print("w2s", w2s_model_metrics)
+
+        # calculate the performance gap between the weak teacher and the strong student
+        weak_floor = gold_model_metrics[self.weak_teacher]["train_half_2"]["accuracy"]
+        strong_ceiling = gold_model_metrics[self.strong_student]["train_half_2"][
+            "accuracy"
+        ]
+        w2s_level = w2s_model_metrics[self.strong_student]["train_half_2"]["accuracy"]
+
+        performance_gap_recovered = (w2s_level - weak_floor) / (
+            strong_ceiling - weak_floor + 1e-9
+        )
+
+        return performance_gap_recovered
+
+    def _get_accuracy_from_results(self, results):
+        model_metrics = {}  # dictionary to hold info for each model
+
+        for res in results:
+            # print(res)
+
+            # 1) Get the model name and task name
+            model_name = str(getattr(res.eval, "model", ""))
+            dataset_name = res.eval.task
+            dataset_name = str(getattr(res.eval.dataset, "name", ""))
+
+            # 2) Initialize defaults (or None) for each metric
+            accuracy = None
+
+            # 3) Check if results and scores exist
+            if res.results and res.results.scores:
+                for score in res.results.scores:
+                    if score.metrics:
+                        # 4) For each metric, check if it exists and store its value
+                        if "accuracy" in score.metrics:
+                            accuracy = score.metrics["accuracy"].value
+
+            # 5) Save the metrics in a dictionary, keyed by the model name
+            if not model_metrics.get(model_name):
+                model_metrics[model_name] = {dataset_name: {}}
+
+            if not model_metrics[model_name].get(dataset_name):
+                model_metrics[model_name][dataset_name] = {}
+
+            model_metrics[model_name][dataset_name] = {
+                "accuracy": accuracy,
+            }
+
+        return model_metrics
+
     def select_random_gold_samples(self, dataset, num_samples):
         random_samples = random.sample(dataset, num_samples)
         return random_samples
@@ -238,14 +235,16 @@ class MATH:
         random_samples = random.sample(dataset, num_samples)
         return random_samples
 
+    def _remove_boxed_tags(self, text):
+        # This regex captures \boxed{...} ensuring it gets the full content inside
+        return re.sub(r"\\boxed\{([^{}]*)\}", r"\1", text)
+
     def _record_to_sample(self, record: dict[str, Any]) -> Sample:
         """
         Convert a MATH record to a Sample. The problem is turned into a prompt
         asking for the final answer in <answer> tags, and the official 'answer'
         field is used as the correct target.
         """
-
-        # print(record)
 
         prompt = dedent(
             f"""{record["problem"]}
@@ -285,11 +284,17 @@ class MATH:
                     few_shot_dataset, self.num_few_shot
                 ):
                     # print(sample)
-                    user_message = ChatMessageUser(content=sample["problem"])
+                    user_message = ChatMessageUser(
+                        content=dedent(
+                            f"""{sample["problem"]}
+
+                        Please enclose your final answer in <answer></answer> tags."""
+                        ).strip()
+                    )
                     state.messages.append(user_message)
 
                     assistant_message = ChatMessageAssistant(
-                        content=sample["solution"]
+                        content=self._remove_boxed_tags(sample["solution"])
                         + "\n <answer>"
                         + sample["answer"]
                         + "</answer>"
@@ -429,7 +434,7 @@ class MATH:
         return raw_train_data_first_half, raw_train_data_second_half, raw_test_data
 
     @staticmethod
-    @scorer(metrics=[accuracy(), ci_lower(), ci_upper(), median()])
+    @scorer(metrics=[accuracy()])
     def grader_scorer():
         """
         A custom MATH scorer. It does the following:
@@ -478,28 +483,18 @@ class MATH:
 
 if __name__ == "__main__":
 
-    tasks = []
+    models = [
+        "claude-3-5-sonnet-latest",
+        "claude-3-opus-20240229",
+        "claude-3-sonnet-20240229",
+        "claude-3-haiku-20240307",
+    ]
+    models = [f"anthropic/{model}" for model in models]
 
-    math_task = MATH()
-    math_task.step_1_eval_weak_teacher()
+    weak_teacher = models[3]
+    strong_student = models[0]
 
-    # tasks.append(math_task.match_task())
+    math_task = MATH(limit=100, num_few_shot=5)
+    performance_gap_recovered = math_task.run(weak_teacher, strong_student)
 
-    # models = [
-    #     "claude-3-5-sonnet-20240620",
-    #     "claude-3-opus-20240229",
-    #     "claude-3-sonnet-20240229",
-    #     "claude-3-haiku-20240307",
-    # ]
-
-    # models = [f"anthropic/{model}" for model in models]
-    # log_timestamp_str = str(time.strftime("%Y%m%d-%H%M%S"))
-    # results = eval(
-    #     tasks,
-    #     model=models[0],
-    #     limit=5,
-    #     log_dir=f"./logs/{log_timestamp_str}/logs",  # specify where logs are stored
-    #     log_format="json",  # choose log format ("eval" or "json")
-    #     score=True,  # ensure scoring is enable
-    #     max_tasks=500,
-    # )
+    print("Performance gap recovered:", performance_gap_recovered)
