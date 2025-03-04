@@ -175,10 +175,6 @@ class MATH:
 
         w2s_model_metrics = self._get_accuracy_from_results(results)
 
-        print("gold", gold_model_metrics)
-
-        print("w2s", w2s_model_metrics)
-
         # calculate the performance gap between the weak teacher and the strong student
         weak_floor = gold_model_metrics[self.weak_teacher]["train_half_2"]["accuracy"]
         strong_ceiling = gold_model_metrics[self.strong_student]["train_half_2"][
@@ -190,13 +186,12 @@ class MATH:
             strong_ceiling - weak_floor + 1e-9
         )
 
-        return performance_gap_recovered
+        return performance_gap_recovered, weak_floor, strong_ceiling, w2s_level
 
     def _get_accuracy_from_results(self, results):
         model_metrics = {}  # dictionary to hold info for each model
 
         for res in results:
-            # print(res)
 
             # 1) Get the model name and task name
             model_name = str(getattr(res.eval, "model", ""))
@@ -283,7 +278,7 @@ class MATH:
                 for sample in self.select_random_gold_samples(
                     few_shot_dataset, self.num_few_shot
                 ):
-                    # print(sample)
+
                     user_message = ChatMessageUser(
                         content=dedent(
                             f"""{sample["problem"]}
@@ -340,7 +335,7 @@ class MATH:
                 for sample in self.select_random_gold_samples(
                     labelled_dataset, self.num_few_shot
                 ):
-                    print(sample)
+
                     user_message = ChatMessageUser(content=sample["problem"])
                     state.messages.append(user_message)
 
