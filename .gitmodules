@@ -1,0 +1,3 @@
+[submodule "prm800k"]
+	path = prm800k
+	url = https://github.com/openai/prm800k.git

@@ -2,10 +2,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.jsonl
+*.ipynb
+*logs/
 # C extensions
 *.so
-
+*.env
 # Distribution / packaging
 .Python
 build/
