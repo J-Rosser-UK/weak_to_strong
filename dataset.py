@@ -78,9 +78,6 @@ class MATH:
         self.train_half_1_raw, self.train_half_2_raw, self.test_raw = (
             self.build_dataset(
                 path="./prm800k/prm800k/math_splits",
-                sample_fields=self._record_to_sample,
-                shuffle=False,
-                seed=self.random_seed,
             )
         )
 
@@ -195,7 +192,6 @@ class MATH:
 
             # 1) Get the model name and task name
             model_name = str(getattr(res.eval, "model", ""))
-            dataset_name = res.eval.task
             dataset_name = str(getattr(res.eval.dataset, "name", ""))
 
             # 2) Initialize defaults (or None) for each metric
@@ -222,11 +218,9 @@ class MATH:
 
         return model_metrics
 
-    def select_random_gold_samples(self, dataset, num_samples):
-        random_samples = random.sample(dataset, num_samples)
-        return random_samples
-
-    def select_random_weak_samples(self, dataset, num_samples):
+    def _select_random_samples(self, dataset, num_samples):
+        if len(dataset) < num_samples:
+            return dataset
         random_samples = random.sample(dataset, num_samples)
         return random_samples
 
@@ -273,17 +267,19 @@ class MATH:
 
             state.messages = []
 
+            state.messages.append(ChatMessageSystem(content=self.system_prompt))
+
             while not state.completed:
 
-                for sample in self.select_random_gold_samples(
+                for sample in self._select_random_samples(
                     few_shot_dataset, self.num_few_shot
                 ):
 
                     user_message = ChatMessageUser(
                         content=dedent(
-                            f"""{sample["problem"]}
+                            f"""<user_problem>{sample["problem"]}</user_problem>
 
-                        Please enclose your final answer in <answer></answer> tags."""
+                        Please proceed with analyzing and solving the given problem and enclose your final answer in <answer></answer> tags."""
                         ).strip()
                     )
                     state.messages.append(user_message)
@@ -330,9 +326,11 @@ class MATH:
             model = get_model(model_name)
             state.messages = []
 
+            state.messages.append(ChatMessageSystem(content=self.system_prompt))
+
             while not state.completed:
 
-                for sample in self.select_random_gold_samples(
+                for sample in self._select_random_samples(
                     labelled_dataset, self.num_few_shot
                 ):
 
@@ -356,32 +354,9 @@ class MATH:
 
         return solve
 
-    @task
-    def match_task(self):
-        """
-        Returns a standard `Task` that uses `match_solver()` (simple forward)
-        and `multi_choice_match()` or a custom scorer. You can customize or
-        rename as needed. For MATH, you likely want to parse the <answer>…</answer>
-        text and check correctness. The simplest approach uses `llm_match()`
-        style logic or a custom text-compare approach.
-        """
-        return Task(
-            time_limit=(self.args.task_timeout if self.args else 60),
-            name=self.__class__.__name__,
-            dataset=self.dataset,
-            solver=self.few_shot_gold_solver(),  # from the parent class
-            scorer=self.grader_scorer(),  # implement a MATH-specific scorer
-            config=GenerateConfig(temperature=0.5),
-        )
-
     def build_dataset(
         self,
         path: str,
-        sample_fields: FieldSpec | RecordToSample | None = None,
-        shuffle: bool = True,
-        seed: int | None = None,
-        limit: int | None = None,
-        **kwargs: Any,
     ) -> Dataset:
         """
         Similar to `filtered_hf_dataset`, but loading from a local JSONL file
@@ -475,6 +450,39 @@ class MATH:
 
         return score
 
+    @property
+    def system_prompt(self):
+        return """You are an AI assistant designed to help users solve a wide variety of problems. Your task is to analyze the given problem, think through the solution process, and provide a clear, accurate answer.
+
+Here is the problem submitted by the user will be placed in <user_problem></user_problem> tags.
+
+Please follow these steps to address the problem:
+
+1. Carefully read and analyze the problem.
+2. In <problem_analysis> tags, break down your thought process and approach to solving the problem. This step is crucial for complex problems that require multiple steps or considerations.
+3. Solve the problem based on your analysis.
+4. Format your final answer and enclose it within <answer> tags.
+
+Important: Always ensure that your final answer is enclosed within the <answer> tags, regardless of the complexity or length of your response.
+
+Example of the expected output structure:
+
+<problem_analysis>
+1. Problem Summary: [Restate the problem in your own words]
+2. Key Information and Variables: [List the important data points and variables]
+3. Solution Steps:
+   - [Step 1]
+   - [Step 2]
+   - [Step 3]
+4. Potential Challenges or Alternative Approaches: [Discuss any difficulties or other methods to consider]
+</problem_analysis>
+
+<answer>
+[Your final, concise answer to the problem goes here. This should be the direct response to the user's question or the solution to their problem.]
+</answer>
+
+Please proceed with analyzing and solving the given problem when given."""
+
 
 if __name__ == "__main__":
 
@@ -489,7 +497,7 @@ if __name__ == "__main__":
     weak_teacher = models[3]
     strong_student = models[0]
 
-    math_task = MATH(limit=5, num_few_shot=5)
+    math_task = MATH(limit=50, num_few_shot=5)
     performance_gap_recovered, weak_floor, strong_ceiling, w2s_level = math_task.run(
         weak_teacher, strong_student
     )
