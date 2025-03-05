@@ -236,9 +236,9 @@ class MATH:
         """
 
         prompt = dedent(
-            f"""{record["problem"]}
+            f"""<user_problem>{record["problem"]}</user_problem>
 
-            Please enclose your final answer in <answer></answer> tags.
+            Please proceed with analyzing and solving the given problem and enclose your final answer in <answer></answer> tags.
             """
         ).strip()
 
@@ -300,8 +300,6 @@ class MATH:
                 state.output = output
                 state.messages.append(output.message)
 
-                state.completed = True
-
                 if not self.ld.get(model_name):
                     self.ld[model_name] = {few_shot_dataset_name: []}
                 elif not self.ld[model_name].get(few_shot_dataset_name):
@@ -314,6 +312,8 @@ class MATH:
                         "target": state.target.text,
                     }
                 )
+
+                state.completed = True
 
             return state
 
